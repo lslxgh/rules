@@ -1,0 +1,68 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Sync branches via native git
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 直接 clone fork（带认证）
+          git clone --no-local \
+            https://x-access-token:${TOKEN}@github.com/${REPO}.git \
+            repo
+          cd repo
+
+          # 添加上游
+          git remote add upstream https://github.com/666OS/rules.git
+          git fetch upstream --tags
+
+          branches="main geo release"
+
+          for branch in $branches; do
+            echo "-----> 同步分支: $branch"
+
+            if ! git show-ref --quiet refs/remotes/upstream/$branch; then
+              echo "上游无此分支，跳过: $branch"
+              continue
+            fi
+
+            # 切换到目标分支
+            git checkout $branch 2>/dev/null \
+              || git checkout -b $branch upstream/$branch
+
+            # 备份 workflows
+            mkdir -p /tmp/wf-bak
+            cp -r .github/workflows /tmp/wf-bak/ 2>/dev/null || true
+
+            # 强制对齐上游
+            git reset --hard upstream/$branch
+
+            # 恢复 workflows
+            mkdir -p .github/workflows
+            cp -r /tmp/wf-bak/workflows/. .github/workflows/ 2>/dev/null || true
+
+            # 提交（若有变更）
+            git add .github/workflows
+            git diff --cached --quiet \
+              || git commit -m "chore: restore workflows after upstream sync [$branch]"
+
+            # 强推
+            git push \
+              https://x-access-token:${TOKEN}@github.com/${REPO}.git \
+              $branch --force
+
+            # 清理备份供下次循环复用
+            rm -rf /tmp/wf-bak
+          done
